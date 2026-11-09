@@ -3,9 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
 #include "job.h"
 
-
+/* ---------- growable array of strings ---------- */
 
 struct strlist {
     char **items;
@@ -20,7 +21,7 @@ static void sl_init(struct strlist *l)
     l->cap = 0;
 }
 
-
+/* Append s (takes ownership); always keeps room for a NULL terminator */
 static void sl_push(struct strlist *l, char *s)
 {
     if (l->len + 2 > l->cap) {
@@ -56,7 +57,9 @@ static char *dup_range(const char *start, size_t n)
     return s;
 }
 
+/* ---------- tokenizer ---------- */
 
+/* Split line into whitespace-separated tokens, stopping at '#' (comment). */
 static void tokenize(const char *line, struct strlist *tokens)
 {
     const char *p = line;
@@ -65,7 +68,7 @@ static void tokenize(const char *line, struct strlist *tokens)
             p++;
         }
         if (*p == '\0' || *p == '#') {
-            break;                      
+            break;                      /* end of line or start of comment */
         }
         const char *start = p;
         while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '\r' && *p != '#') {
@@ -92,7 +95,95 @@ static void syntax_error(const char *msg)
     (void)write(STDERR_FILENO, "\n", 1);
 }
 
+/* ---------- wildcards ---------- */
 
+static int cmp_str(const void *a, const void *b)
+{
+    return strcmp(*(char * const *)a, *(char * const *)b);
+}
+
+/* Expand a token containing '*' and append the results to args.
+   The '*' may only appear in the last path component (e.g. "baz/foo*bar").
+   Matching names are added in sorted order; if nothing matches, the token
+   itself is added unchanged. */
+static void expand_wildcard(const char *tok, struct strlist *args)
+{
+    const char *slash = strrchr(tok, '/');
+    const char *pattern = (slash != NULL) ? slash + 1 : tok;
+    const char *star = strchr(pattern, '*');
+
+    if (star == NULL) {                 /* '*' only in a directory part: not supported */
+        sl_push(args, strdup(tok));
+        return;
+    }
+
+    /* directory to search, and the text to put in front of each match */
+    size_t dir_len = (slash != NULL) ? (size_t)(slash - tok) : 0;
+    char *dir = (slash == NULL) ? strdup(".")
+              : (dir_len == 0) ? strdup("/")          /* pattern like "/foo*" */
+              : dup_range(tok, dir_len);
+    char *front = dup_range(tok, (slash != NULL) ? dir_len + 1 : 0);
+
+    size_t pre_len = (size_t)(star - pattern);
+    const char *suffix = star + 1;
+    size_t suf_len = strlen(suffix);
+
+    struct strlist matches;
+    sl_init(&matches);
+
+    DIR *d = opendir(dir);
+    if (d != NULL) {
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL) {
+            const char *name = e->d_name;
+            size_t name_len = strlen(name);
+
+            if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+                continue;
+            }
+            if (pre_len == 0 && name[0] == '.') {
+                continue;               /* "*..." never matches hidden files */
+            }
+            if (name_len < pre_len + suf_len) {
+                continue;
+            }
+            if (strncmp(name, pattern, pre_len) != 0) {
+                continue;               /* wrong beginning */
+            }
+            if (strcmp(name + name_len - suf_len, suffix) != 0) {
+                continue;               /* wrong ending */
+            }
+
+            /* match: build front + name, e.g. "baz/" + "foo1bar" */
+            char *full = malloc(strlen(front) + name_len + 1);
+            if (full == NULL) {
+                perror("malloc");
+                exit(EXIT_FAILURE);
+            }
+            strcpy(full, front);
+            strcat(full, name);
+            sl_push(&matches, full);
+        }
+        closedir(d);
+    }
+
+    if (matches.len == 0) {
+        sl_push(args, strdup(tok));     /* no match: pass the token unchanged */
+    } else {
+        qsort(matches.items, matches.len, sizeof(char *), cmp_str);
+        for (int i = 0; i < matches.len; i++) {
+            sl_push(args, matches.items[i]);   /* ownership moves to args */
+        }
+        free(matches.items);
+    }
+
+    free(dir);
+    free(front);
+}
+
+/* ---------- parser ---------- */
+
+/* Finish the command being built and add it to the job */
 static void add_command(struct job *job, struct strlist *args,
                         char *infile, char *outfile, int append)
 {
@@ -102,7 +193,7 @@ static void add_command(struct job *job, struct strlist *args,
         exit(EXIT_FAILURE);
     }
     struct command *c = &job->cmds[job->ncmds++];
-    c->argv = args->items;      
+    c->argv = args->items;      /* already NULL-terminated by sl_push */
     c->argc = args->len;
     c->infile = infile;
     c->outfile = outfile;
@@ -118,7 +209,7 @@ int parse_line(const char *line, struct job *job)
     job->cmds = NULL;
     job->ncmds = 0;
 
-    if (tokens.len == 0) {              
+    if (tokens.len == 0) {              /* empty line or comment only */
         sl_free(&tokens);
         return 0;
     }
@@ -141,7 +232,7 @@ int parse_line(const char *line, struct job *job)
                 error = 1;
             } else {
                 add_command(job, &args, infile, outfile, append);
-                sl_init(&args);         
+                sl_init(&args);         /* ownership moved into the job */
                 infile = outfile = NULL;
                 append = 0;
             }
@@ -161,8 +252,12 @@ int parse_line(const char *line, struct job *job)
                 }
             }
         } else {
-            
-            sl_push(&args, strdup(t));
+            /* ordinary argument; a token with '*' is a wildcard */
+            if (strchr(t, '*') != NULL) {
+                expand_wildcard(t, &args);
+            } else {
+                sl_push(&args, strdup(t));
+            }
         }
     }
 
