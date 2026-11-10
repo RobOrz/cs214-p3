@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include "execute.h"
 #include "job.h"
@@ -104,6 +105,9 @@ int main(int argc, char *argv[])
         interactive = 0;               /* a script file is always batch mode */
     } else {
         interactive = isatty(STDIN_FILENO);
+	}
+        if (interactive) {
+        signal(SIGINT, SIG_IGN);   /* Ctrl+C should stop the child, not the shell */
     }
 
     char buf[BUFSIZE];

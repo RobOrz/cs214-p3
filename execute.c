@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include "execute.h"
 
@@ -356,6 +357,7 @@ struct job_result run_job(struct job *job, int interactive)
         }
 
         if (child == 0) {
+            signal(SIGINT, SIG_DFL);   /* restore normal Ctrl+C in the child */
             if (set_up_io(&job->cmds[i], i, ncmds, pipes, npipes,
                           interactive) != 0) {
                 _exit(1);
