@@ -4,8 +4,92 @@ Partners:
   Robert Orzol - rao73
   Danny Vinajero - dv328
 
+Building and running:
+  make
+  ./mysh              interactive if stdin is a terminal, otherwise batch
+  ./mysh script.sh    batch mode, reading commands from script.sh
+
 Design Notes:
-  (fill in later)
+  Files:
+    mysh.c     input loop, interactive/batch mode, prompt, status messages
+    parse.c    tokenizer, comments, parser, wildcard expansion
+    execute.c  path search, fork/execv, redirection, pipes, built-ins
+    job.h      struct command / struct job shared by the parser and executor
+
+  Input: one loop for both modes. read() fills a buffer; each complete line
+  is run as soon as its newline is found, before read() is called again, so
+  interactive mode never blocks while a full command is waiting. Lines can
+  be any length (the line buffer grows with realloc). A final line without
+  a newline is run at end of input.
+
+  Modes: with a script argument mysh is always in batch mode; with no
+  argument, isatty(STDIN_FILENO) decides. Only interactive mode prints the
+  welcome/goodbye messages, the prompt, and "Exited with status N" /
+  "Terminated by signal X" (via strsignal). In batch mode children get
+  /dev/null as standard input, so a program cannot consume the rest of a
+  piped-in script.
+
+  Prompt: getcwd(), with the $HOME prefix replaced by ~ only when it is a
+  whole path prefix (so /home/user2 is not shortened for HOME=/home/user).
+
+  Parsing: tokens are split on whitespace; # starts a comment. A line is
+  split on | into commands. <, > and >> take the next token as the file
+  name. Syntax errors (missing file name, missing command around |, two
+  input or two output redirections in one command) print an error and the
+  line is skipped.
+
+  Wildcards: a token containing * is split at its last / into a directory
+  and a pattern. Names that begin with the text before * and end with the
+  text after * match; patterns starting with * skip hidden files. Matches
+  are added in sorted order; if none match, the token is passed unchanged.
+
+  Execution: a name containing / is used as a path; otherwise /usr/local/bin,
+  /usr/bin and /bin are searched with access(X_OK). Programs run with execv.
+  Redirection uses open() + dup2() in the child; > and >> create files with
+  mode 0640. A pipeline of n commands uses n-1 pipes; all unused pipe ends
+  are closed, and the job succeeds if the last command succeeds.
+
+  Built-ins: cd (no argument = $HOME), pwd, which, exit. A built-in alone
+  runs in the shell; inside a pipeline it runs in a child. Any command line
+  containing exit ends the shell after the whole line finishes.
+
+  Signals: in interactive mode the shell ignores SIGINT, and each child
+  restores the default before execv, so Ctrl+C stops the running program
+  but not the shell.
 
 Test Plan:
-  (fill in later)
+  Test scripts are in tests/ and run in batch mode with ./mysh tests/NAME.sh.
+  Each targets one part of the spec:
+
+  basic.sh            commands, comment-only lines, empty lines, trailing
+                      comments
+  redirect.sh         > creates/truncates, >> appends, < reads input
+  pipes.sh            a 2-stage and a 3-stage pipeline
+  builtins.sh         pwd; cd to a directory, to $HOME (no argument), to a
+                      missing directory (error) and with too many
+                      arguments (error); which for found and missing names
+  syntax.sh           "< <", "| ls", "ls |", "echo >" all report a syntax
+                      error and the shell continues with the next line
+  status.sh           failing programs (false, unknown command) do not stop
+                      the shell
+  exit.sh             exit stops the shell; later lines are not run
+  exit_pipe.sh        exit inside a pipeline: the pipeline finishes, then
+                      the shell exits
+  wildcard.sh         *.c, a pattern in a subdirectory (baz/foo*bar), and
+                      an unmatched pattern passed through unchanged; the
+                      files are in tests/globtest (includes a hidden file
+                      that *.c must not match)
+  builtin_redirect.sh pwd and which with output redirection
+  paths.sh            running a program by full path; a bad path reports
+                      an error
+  batch_stdin.sh      run as "cat tests/batch_stdin.sh | ./mysh": cat gets
+                      /dev/null, so it does not swallow the next line
+
+  Other checks:
+  - Files created by > and >> have mode 640 (checked with ls -l).
+  - ./mysh nosuchfile prints an error and exits with status 1.
+  - Interactive mode, by hand: welcome/goodbye messages, prompt with ~,
+    prompt updates after cd, "Exited with status 1" after false,
+    "Terminated by signal Interrupt" after Ctrl+C during sleep 30 (the
+    shell keeps running), and typed-ahead input is not read until the
+    running command finishes.
