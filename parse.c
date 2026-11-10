@@ -243,12 +243,22 @@ int parse_line(const char *line, struct job *job)
             } else {
                 char *file = strdup(tokens.items[++i]);
                 if (strcmp(t, "<") == 0) {
-                    free(infile);
-                    infile = file;
+                    if (infile != NULL) {
+                        syntax_error("multiple input redirections");
+                        free(file);
+                        error = 1;
+                    } else {
+                        infile = file;
+                    }
                 } else {
-                    free(outfile);
-                    outfile = file;
-                    append = (strcmp(t, ">>") == 0);
+                    if (outfile != NULL) {
+                        syntax_error("multiple output redirections");
+                        free(file);
+                        error = 1;
+                    } else {
+                        outfile = file;
+                        append = (strcmp(t, ">>") == 0);
+                    }
                 }
             }
         } else {

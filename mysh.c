@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include "execute.h"
 #include "job.h"
 
 #define BUFSIZE 1024
@@ -43,35 +44,37 @@ static void print_prompt(void)
     free(cwd);
 }
 
-/* Parse one command line and run it */
-static void run_line(char *line)
+/* Print a failure message before the next interactive prompt. */
+static void report_result(struct job_result result)
 {
+    char message[80];
+
+    if (result.signal != 0) {
+        const char *signal_name = strsignal(result.signal);
+        say("Terminated by signal ");
+        say(signal_name != NULL ? signal_name : "unknown");
+        say("\n");
+    } else if (result.exit_code != 0) {
+        snprintf(message, sizeof(message), "Exited with status %d\n",
+                 result.exit_code);
+        say(message);
+    }
+}
+
+/* Parse one command line, run it, and return its result. */
+static struct job_result run_line(char *line)
+{
+    struct job_result result = { 0, 0 };
     struct job job;
     if (parse_line(line, &job) != 0) {
-        return;                         /* syntax error: the command fails */
+        result.exit_code = 1;
+        return result;                  /* syntax error: the command fails */
     }
     if (job.ncmds == 0) {
-        return;                         /* empty line or comment only */
+        return result;                  /* empty line or comment only */
     }
 
-    /* TEMPORARY: show the parsed job until run_job() is ready */
-    for (int i = 0; i < job.ncmds; i++) {
-        struct command *c = &job.cmds[i];
-        say("[cmd]");
-        for (int j = 0; j < c->argc; j++) {
-            say(" ");
-            say(c->argv[j]);
-        }
-        if (c->infile != NULL) {
-            say("  < ");
-            say(c->infile);
-        }
-        if (c->outfile != NULL) {
-            say(c->append ? "  >> " : "  > ");
-            say(c->outfile);
-        }
-        say("\n");
-    }
+    result = run_job(&job, interactive);
 
     /* exit anywhere in the command ends the shell once the command is done */
     for (int i = 0; i < job.ncmds; i++) {
@@ -81,6 +84,7 @@ static void run_line(char *line)
     }
 
     free_job(&job);
+    return result;
 }
 
 int main(int argc, char *argv[])
@@ -123,7 +127,10 @@ int main(int argc, char *argv[])
         if (n == 0) {                  /* end of input */
             if (len > 0) {             /* last line had no trailing newline */
                 line[len] = '\0';
-                run_line(line);
+                struct job_result result = run_line(line);
+                if (interactive) {
+                    report_result(result);
+                }
                 len = 0;
             }
             break;
@@ -145,10 +152,13 @@ int main(int argc, char *argv[])
             if (buf[i] == '\n') {
                 /* full command received: run it before reading any further */
                 line[len] = '\0';
-                run_line(line);
+                struct job_result result = run_line(line);
                 len = 0;
-                if (interactive && !exit_requested) {
-                    print_prompt();
+                if (interactive) {
+                    report_result(result);
+                    if (!exit_requested) {
+                        print_prompt();
+                    }
                 }
             } else {
                 line[len++] = buf[i];
