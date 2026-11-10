@@ -11,8 +11,8 @@
 #include "execute.h"
 
 /*
- * This file contains the part of the shell that runs a parsed job.
- * mysh.c reads input, parse.c builds the job, and this file executes it.
+ This file contains the part of the shell that runs a parsed job.
+  mysh.c reads input, parse.c builds the job, and this file executes it.
  */
 
 /* Make a normal result. Most shell errors use exit code 1. */
@@ -30,9 +30,9 @@ static struct job_result wait_result(int status)
     struct job_result result = normal_result(1);
 
     if (WIFEXITED(status)) {
-        result.exit_code = WEXITSTATUS(status);
+    result.exit_code = WEXITSTATUS(status);
     } else if (WIFSIGNALED(status)) {
-        result.signal = WTERMSIG(status);
+       result.signal = WTERMSIG(status);
     }
 
     return result;
@@ -54,9 +54,9 @@ static char *find_program(const char *name)
     for (int i = 0; i < count; i++) {
         size_t size = strlen(directories[i]) + 1 + strlen(name) + 1;
         char *path = malloc(size);
-        if (path == NULL) {
-            perror("malloc");
-            exit(EXIT_FAILURE);
+    if (path == NULL) {
+        perror("malloc");
+        exit(EXIT_FAILURE);
         }
 
         snprintf(path, size, "%s/%s", directories[i], name);
@@ -72,8 +72,7 @@ static char *find_program(const char *name)
 /* Return 1 when the command is implemented by mysh itself. */
 static int is_builtin(const char *name)
 {
-    return strcmp(name, "cd") == 0 || strcmp(name, "pwd") == 0 ||
-           strcmp(name, "which") == 0 || strcmp(name, "exit") == 0;
+    return strcmp(name, "cd") == 0 || strcmp(name, "pwd") == 0 || strcmp(name, "which") == 0 || strcmp(name, "exit") == 0;
 }
 
 /* Keep writing until the full string is written or an error occurs. */
@@ -96,8 +95,7 @@ static int write_all(int fd, const char *text, size_t length)
 /* Write one line to standard output without using buffered stdio. */
 static int print_line(const char *text)
 {
-    if (write_all(STDOUT_FILENO, text, strlen(text)) < 0 ||
-        write_all(STDOUT_FILENO, "\n", 1) < 0) {
+    if (write_all(STDOUT_FILENO, text, strlen(text)) < 0 || write_all(STDOUT_FILENO, "\n", 1) < 0) {
         perror("write");
         return -1;
     }
@@ -265,8 +263,7 @@ io_error:
  * change the shell's directory. Save and restore standard input/output so
  * redirection only lasts for this one command.
  */
-static struct job_result run_builtin_in_shell(struct command *cmd,
-                                              int interactive)
+static struct job_result run_builtin_in_shell(struct command *cmd, int interactive)
 {
     int saved_input = dup(STDIN_FILENO);
     int saved_output = dup(STDOUT_FILENO);
@@ -363,8 +360,6 @@ struct job_result run_job(struct job *job, int interactive)
                           interactive) != 0) {
                 _exit(1);
             }
-
-            /* Built-ins in a pipeline run in a child like other commands. */
             if (is_builtin(job->cmds[i].argv[0])) {
                 _exit(run_builtin(&job->cmds[i]));
             }
